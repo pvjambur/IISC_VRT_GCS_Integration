@@ -11,4 +11,5 @@ python-dateutil
 requests
 pathlib
 shutilwhich
-pydub>=0.25.1
+pydub
+jinja2
