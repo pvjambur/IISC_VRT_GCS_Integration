@@ -4,7 +4,7 @@ FROM python:3.12-slim
 # Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PORT=8080 \
+    PORT=8000 \
     GOOGLE_APPLICATION_CREDENTIALS="/app/credentials.json"
 
 # Install system dependencies
@@ -46,4 +46,4 @@ EXPOSE $PORT
 #     CMD curl -f http://localhost:$PORT/health || exit 1
 
 # Start the FastAPI app using Uvicorn
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
