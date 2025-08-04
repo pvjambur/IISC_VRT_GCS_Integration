@@ -94,7 +94,3 @@ async def get_video(folder: str, filename: str):
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Video not found")
     return FileResponse(video_path)
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
