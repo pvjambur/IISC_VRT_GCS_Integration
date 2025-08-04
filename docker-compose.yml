@@ -1,0 +1,17 @@
+version: '3.12'
+
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - ./credentials.json:/app/credentials.json
+      - ./client_secrets.json:/app/client_secrets.json
+      - ./settings.yaml:/app/settings.yaml
+      - ./static:/app/static
+      - ./templates:/app/templates
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped

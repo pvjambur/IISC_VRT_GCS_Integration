@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+python-multipart
+PyDrive2
+google-api-python-client
+oauth2client
+PyYAML
+python-dotenv
+httpx
+python-dateutil
+requests
+pathlib
+shutilwhich
