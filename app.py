@@ -1,13 +1,13 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from pathlib import Path
 import os
 import time
-from datetime import datetime
-from drive_client import DriveClient
 import shutil
+from drive_client import DriveClient
+import uuid
 
 app = FastAPI()
 drive_client = DriveClient()
@@ -17,12 +17,25 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+async def dashboard(request: Request):
+    data = drive_client.get_all_data()
+    drive_space = drive_client.get_drive_space()
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request,
+        "data": data,
+        "drive_space": drive_space
+    })
 
-@app.post("/upload")
-async def upload_video(
-    request: Request,
+@app.get("/upload", response_class=HTMLResponse)
+async def upload_page(request: Request):
+    drive_space = drive_client.get_drive_space()
+    return templates.TemplateResponse("upload.html", {
+        "request": request,
+        "drive_space": drive_space
+    })
+
+@app.post("/api/upload")
+async def upload_data(
     name: str = Form(...),
     age: str = Form(...),
     gender: str = Form(...),
@@ -30,56 +43,58 @@ async def upload_video(
     video: UploadFile = File(...)
 ):
     try:
-        # Create a temporary directory for upload
-        timestamp = str(int(time.time()))
-        temp_dir = Path("static/temp") / timestamp
-        temp_dir.mkdir(parents=True, exist_ok=True)
+        # Create local folder
+        folder_name, folder_path = drive_client.create_local_folder()
         
-        # Save the video file temporarily
-        video_filename = f"video_{timestamp}{Path(video.filename).suffix}"
-        video_path = temp_dir / video_filename
+        # Generate unique filenames
+        timestamp = str(int(time.time()))
+        unique_id = str(uuid.uuid4())[:8]
+        
+        # Save video file
+        video_ext = os.path.splitext(video.filename)[1]
+        video_filename = f"video_{timestamp}_{unique_id}{video_ext}"
+        video_path = os.path.join(folder_path, video_filename)
         with open(video_path, "wb") as buffer:
             shutil.copyfileobj(video.file, buffer)
         
-        # Create information file
+        # Create info file
         info_content = f"Name: {name}\nAge: {age}\nGender: {gender}\nCondition: {condition}"
-        info_filename = f"information_{timestamp}.txt"
-        info_path = temp_dir / info_filename
+        info_filename = f"info_{timestamp}_{unique_id}.txt"
+        info_path = os.path.join(folder_path, info_filename)
         with open(info_path, "w") as f:
             f.write(info_content)
         
-        # Create folder in Google Drive
-        folder_id = drive_client.create_data_folder()
+        # Upload to Google Drive
+        drive_client.upload_to_drive(folder_name, video_path)
+        drive_client.upload_to_drive(folder_name, info_path)
         
-        # Upload files sequentially
-        video_id = drive_client.upload_file_to_folder(folder_id, str(video_path))
-        info_id = drive_client.upload_file_to_folder(folder_id, str(info_path))
-        
-        # Clean up temp files
-        shutil.rmtree(temp_dir)
+        # Update local folders cache
+        drive_client.local_folders = drive_client._scan_local_folders()
         
         return JSONResponse({
             "status": "success",
-            "message": "Files uploaded successfully",
-            "folder_id": folder_id,
-            "video_id": video_id,
-            "info_id": info_id
+            "folder": folder_name,
+            "video": video_filename,
+            "info": info_filename
         })
     except Exception as e:
-        # Clean up temp files if they exist
-        if 'temp_dir' in locals() and temp_dir.exists():
-            shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/upload_progress/{filename}")
-async def get_upload_progress(filename: str):
-    progress = drive_client.get_upload_progress(filename)
-    return {"progress": progress}
+@app.get("/api/data")
+async def get_all_data():
+    return drive_client.get_all_data()
 
-@app.get("/drive_space")
+@app.get("/api/drive_space")
 async def get_drive_space():
-    return drive_client.drive_space
+    return drive_client.get_drive_space()
+
+@app.get("/videos/{folder}/{filename}")
+async def get_video(folder: str, filename: str):
+    video_path = Path("static/temp") / folder / filename
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Video not found")
+    return FileResponse(video_path)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8080)
