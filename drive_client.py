@@ -65,12 +65,6 @@ class DriveClient:
                     'files': [f.name for f in folder.iterdir() if f.is_file()]
                 }
         return folders
-    
-    def create_local_folder(self):
-        folder_name = self.get_next_folder_name()
-        folder_path = Path(self.local_base) / folder_name
-        folder_path.mkdir(exist_ok=True)
-        return folder_name, folder_path
 
     def get_drive_space(self):
         # Return the hardcoded values instead of making an API call
@@ -92,16 +86,37 @@ class DriveClient:
         
         logger.info(f"Drive space updated: {self._hardcoded_space}")
 
-    def get_next_folder_name(self):
-        folders = self.drive.ListFile({'q': "'root' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"}).GetList()
-        nums = []
-        for folder in folders:
-            if folder['title'].startswith("Data"):
-                match = re.match(r'Data(\d+)', folder['title'])
-                if match:
-                    nums.append(int(match.group(1)))
+    def get_next_folder_name_from_drive(self):
+        """Get next folder name by checking Google Drive"""
+        try:
+            folders = self.drive.ListFile({'q': "'root' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"}).GetList()
+            nums = []
+            for folder in folders:
+                if folder['title'].startswith("Data"):
+                    match = re.match(r'Data(\d+)', folder['title'])
+                    if match:
+                        nums.append(int(match.group(1)))
+            
+            next_num = max(nums) + 1 if nums else 1
+            return f"Data{next_num}"
+        except Exception as e:
+            logger.error(f"Error getting next folder name from drive: {e}")
+            # Fallback to local check
+            return self.get_next_folder_name_from_local()
+    
+    def get_next_folder_name_from_local(self):
+        """Get next folder name by checking local temp directory"""
+        existing_folders = [d for d in Path(self.local_base).iterdir() if d.is_dir() and d.name.startswith("Data")]
+        numbers = []
         
-        next_num = max(nums) + 1 if nums else 1
+        for folder in existing_folders:
+            try:
+                num = int(folder.name[4:])  # Extract number from "DataX"
+                numbers.append(num)
+            except ValueError:
+                continue
+        
+        next_num = max(numbers) + 1 if numbers else 1
         return f"Data{next_num}"
 
     def get_folder_id(self, folder_path: str):
@@ -130,6 +145,7 @@ class DriveClient:
                 folder = self.drive.CreateFile(folder_metadata)
                 folder.Upload()
                 parent_id = folder['id']
+                logger.info(f"Created folder '{part}' in drive")
             else:
                 parent_id = folders[0]['id']
         return parent_id
@@ -141,6 +157,13 @@ class DriveClient:
             if not file_name:
                 file_name = os.path.basename(file_path)
             
+            # Check if file already exists
+            query = f"title='{file_name}' and '{folder_id}' in parents and trashed=false"
+            existing_files = self.drive.ListFile({'q': query}).GetList()
+            if existing_files:
+                logger.info(f"File '{file_name}' already exists in '{drive_path}', skipping upload")
+                return existing_files[0]['id']
+            
             file_metadata = {
                 'title': file_name,
                 'parents': [{'id': folder_id}]
@@ -150,10 +173,10 @@ class DriveClient:
             file.SetContentFile(file_path)
             file.Upload()
             
-            # Since we're using hardcoded space, we increment it here
             file_size_bytes = os.path.getsize(file_path)
             self.increment_drive_space(file_size_bytes)
             
+            logger.info(f"Successfully uploaded '{file_name}' to '{drive_path}'")
             return file['id']
         except Exception as e:
             logger.error(f"Error uploading to drive: {e}")
@@ -170,10 +193,11 @@ class DriveClient:
                 folder_id = folder['id']
                 
                 info_file = None
-                video_file = None
+                clips_count = 0
                 status = "Pending"
                 reason = ""
                 
+                # Get patient.txt info
                 info_query = f"title='patient.txt' and '{folder_id}' in parents and trashed=false"
                 info_files = self.drive.ListFile({'q': info_query}).GetList()
                 if info_files:
@@ -191,19 +215,18 @@ class DriveClient:
                     status = info_dict.get('Verification Status', 'Pending')
                     reason = info_dict.get('Reason', '')
                 
-                video_query = f"title contains 'original_video' and '{folder_id}' in parents and trashed=false"
-                video_files = self.drive.ListFile({'q': video_query}).GetList()
-                if video_files:
-                    video_file = {
-                        'name': video_files[0]['title'],
-                        'id': video_files[0]['id']
-                    }
+                # Count clips in Clips subfolder
+                clips_folder_id = self.get_folder_id(f"{folder_name}/Clips")
+                if clips_folder_id:
+                    clips_query = f"'{clips_folder_id}' in parents and trashed=false"
+                    clips_files = self.drive.ListFile({'q': clips_query}).GetList()
+                    clips_count = len(clips_files)
 
                 if info_file:
                     data.append({
                         'folder': folder_name,
                         'info': info_file,
-                        'video': video_file,
+                        'clips_count': clips_count,
                         'status': status,
                         'reason': reason
                     })
@@ -230,7 +253,6 @@ class DriveClient:
                 info_dict[key.strip()] = value.strip()
         
         return {'info': info_dict}
-
 
     def download_clips_for_folder(self, folder_name: str):
         clips_drive_path = f"{folder_name}/Clips"
@@ -283,3 +305,30 @@ class DriveClient:
         
         info_file.SetContentString(new_content)
         info_file.Upload()
+        logger.info(f"Updated verification status for {folder_name}: {status}")
+
+    def check_folder_exists_in_drive(self, folder_name: str) -> bool:
+        """Check if a folder exists in Google Drive"""
+        try:
+            folder_id = self.get_folder_id(folder_name)
+            return folder_id is not None
+        except Exception as e:
+            logger.error(f"Error checking if folder exists: {e}")
+            return False
+    
+    def get_clips_in_folder(self, folder_name: str) -> List[str]:
+        """Get list of clip filenames in a folder's Clips subfolder"""
+        try:
+            clips_folder_id = self.get_folder_id(f"{folder_name}/Clips")
+            if not clips_folder_id:
+                return []
+            
+            query = f"'{clips_folder_id}' in parents and trashed=false"
+            clips = self.drive.ListFile({'q': query}).GetList()
+            
+            clip_names = [clip['title'] for clip in clips if clip['title'].startswith('Clip')]
+            clip_names.sort()  # Sort to get proper order
+            return clip_names
+        except Exception as e:
+            logger.error(f"Error getting clips in folder {folder_name}: {e}")
+            return []

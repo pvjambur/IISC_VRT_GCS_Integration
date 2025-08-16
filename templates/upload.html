@@ -177,15 +177,30 @@
             cursor: pointer;
             transition: all 0.3s;
             display: inline-block;
+            margin-right: 10px;
         }
 
         .btn:hover {
             background: var(--secondary);
         }
 
+        .btn:disabled {
+            background: grey;
+            cursor: not-allowed;
+        }
+
+        .btn-danger {
+            background: var(--danger);
+        }
+
+        .btn-danger:hover {
+            background: #d91e68;
+        }
+
         .btn-block {
             display: block;
             width: 100%;
+            margin-right: 0;
         }
 
         .file-upload {
@@ -255,20 +270,61 @@
         .video-controls {
             display: flex;
             justify-content: center;
-            gap: 10px;
-            margin-top: 10px;
+            align-items: center;
+            gap: 15px;
+            margin-top: 15px;
+            flex-wrap: wrap;
         }
         
         .video-container {
-            border: 1px solid var(--border-color);
+            border: 2px solid var(--border-color);
             background: #000;
             position: relative;
+            border-radius: 8px;
+            overflow: hidden;
         }
 
         #webcam-feed {
             width: 100%;
             height: auto;
             display: block;
+        }
+
+        .recording-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: var(--danger);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 14px;
+            font-weight: bold;
+            display: none;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .recording-status {
+            font-weight: 500;
+            padding: 8px 12px;
+            border-radius: 6px;
+            background: var(--card-background);
+            border: 1px solid var(--border-color);
+        }
+
+        .clip-counter {
+            background: var(--success);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 14px;
+            font-weight: bold;
         }
     </style>
 </head>
@@ -327,15 +383,17 @@
                 </div>
 
                 <div class="form-group">
-                    <label>Record Video from Webcam</label>
+                    <label>Record Video from Webcam (15-second clips)</label>
                     <div class="video-container">
-                        <video id="webcam-feed" playsinline></video>
+                        <video id="webcam-feed" autoplay muted playsinline></video>
+                        <div class="recording-indicator" id="recording-indicator">🔴 REC</div>
                     </div>
                     <div class="video-controls">
                         <button type="button" class="btn" id="start-record">Start Recording</button>
-                        <button type="button" class="btn" id="stop-record" style="display: none;">Stop Recording</button>
-                        <span id="recording-status" style="margin-left: 10px;">Webcam is off.</span>
-                        <input type="hidden" id="recording-id" name="recording_id">
+                        <button type="button" class="btn btn-danger" id="stop-record" style="display: none;">Stop Recording</button>
+                        <div class="recording-status" id="recording-status">Click Start Recording to begin</div>
+                        <div class="clip-counter" id="clip-counter" style="display: none;">Clips: 0</div>
+                        <input type="hidden" id="folder-name" name="folder_name">
                     </div>
                 </div>
                 
@@ -369,103 +427,187 @@
         const stopBtn = document.getElementById('stop-record');
         const submitBtn = document.getElementById('submit-btn');
         const recordingStatus = document.getElementById('recording-status');
-        const recordingIdInput = document.getElementById('recording-id');
+        const recordingIndicator = document.getElementById('recording-indicator');
+        const clipCounter = document.getElementById('clip-counter');
+        const folderNameInput = document.getElementById('folder-name');
         const alertSuccess = document.getElementById('alert-success');
         const alertDanger = document.getElementById('alert-danger');
         const progressContainer = document.getElementById('progressContainer');
         const progressBar = document.getElementById('progress');
         const status = document.getElementById('status');
+        
+        // Configuration for MediaRecorder
+        const clipDuration = 15000; // 15 seconds in milliseconds
 
         let mediaRecorder;
         let ws;
-        let recordingId;
-        let stream;
+        let folderName;
+        let clipCount = 0;
+        let isRecording = false;
 
+        // Start webcam
         async function startWebcam() {
             try {
-                // Request access to webcam and microphone
-                stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: 1280, height: 720 }, 
+                    audio: true 
+                });
                 webcamFeed.srcObject = stream;
-                webcamFeed.play();
-                recordingStatus.textContent = 'Webcam is active.';
-                return stream;
+                console.log('Webcam started successfully');
             } catch (err) {
                 console.error("Error accessing webcam:", err);
-                alert("Could not access webcam. Please check permissions.");
-                return null;
+                showAlert('Could not access webcam. Please check permissions.', 'danger');
             }
         }
 
+        // Show alert messages
+        function showAlert(message, type) {
+            const alertDiv = type === 'success' ? alertSuccess : alertDanger;
+            alertDiv.textContent = message;
+            alertDiv.style.display = 'block';
+            setTimeout(() => {
+                alertDiv.style.display = 'none';
+            }, 5000);
+        }
+
+        // Reset recording UI
+        function resetRecordingUI() {
+            startBtn.style.display = 'inline-block';
+            stopBtn.style.display = 'none';
+            recordingIndicator.style.display = 'none';
+            isRecording = false;
+        }
+
+        // Start recording
         startBtn.addEventListener('click', async () => {
-            const mediaStream = await startWebcam();
-            if (!mediaStream) return;
-
-            // Connect to WebSocket and start recording
-            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws/record`);
+            const stream = webcamFeed.srcObject;
+            if (!stream) {
+                showAlert('Please allow webcam access first.', 'danger');
+                return;
+            }
             
-            ws.onopen = () => {
-                mediaRecorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm; codecs=vp9' });
+            try {
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws/record`);
                 
-                mediaRecorder.ondataavailable = (event) => {
-                    if (event.data.size > 0) {
-                        ws.send(event.data);
+                ws.onopen = () => {
+                    console.log('WebSocket connection established.');
+                    
+                    try {
+                        let options = { mimeType: 'video/webm; codecs=vp9' };
+                        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                            options = { mimeType: 'video/webm; codecs=vp8' };
+                            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                                options = {}; // Fallback to browser's default
+                            }
+                        }
+                        
+                        mediaRecorder = new MediaRecorder(stream, options);
+                        
+                        mediaRecorder.ondataavailable = (event) => {
+                            if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+                                console.log(`Sending clip data of size ${event.data.size} bytes.`);
+                                ws.send(event.data);
+                            }
+                        };
+                        
+                        mediaRecorder.onstop = () => {
+                            console.log('MediaRecorder stopped.');
+                            // The final, incomplete clip data is automatically sent via ondataavailable
+                            resetRecordingUI();
+                            recordingStatus.textContent = `Recording complete! ${clipCount} clips created. You can now upload.`;
+                            submitBtn.disabled = false;
+                        };
+                        
+                        mediaRecorder.start(clipDuration); // Send data every 15 seconds
+                        
+                        startBtn.style.display = 'none';
+                        stopBtn.style.display = 'inline-block';
+                        recordingIndicator.style.display = 'block';
+                        clipCounter.style.display = 'inline-block';
+                        submitBtn.disabled = true;
+                        isRecording = true;
+                        clipCount = 0;
+                        updateClipCounter();
+                        
+                        recordingStatus.textContent = `Recording... Waiting for folder name from server.`;
+                        
+                    } catch (e) {
+                        console.error("Error setting up MediaRecorder:", e);
+                        showAlert('Error setting up video recording. Please try again.', 'danger');
+                        if (ws.readyState === WebSocket.OPEN) {
+                            ws.close();
+                        }
+                        resetRecordingUI();
                     }
                 };
-                
-                mediaRecorder.onstop = () => {
-                    if (ws) {
-                        ws.close();
+
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    console.log('WebSocket message:', data);
+                    
+                    if (data.status === "recording_started") {
+                        console.log('Recording started with folder:', data.folder_name);
+                        folderName = data.folder_name;
+                        folderNameInput.value = folderName;
+                        recordingStatus.textContent = `Recording to folder: ${folderName}`;
+                    } else if (data.status === "new_clip_saved") {
+                        clipCount = data.clip_number;
+                        updateClipCounter();
+                        console.log('New clip saved on server:', data.clip_number);
+                        recordingStatus.textContent = `Recording... Clip ${data.clip_number} saved.`;
                     }
-                    recordingStatus.textContent = 'Recording complete! You can now upload.';
+                };
+
+                ws.onclose = () => {
+                    console.log('WebSocket connection closed.');
+                    if (isRecording) {
+                        // This handles cases where the connection is closed unexpectedly
+                        mediaRecorder.stop();
+                    }
+                };
+
+                ws.onerror = (err) => {
+                    console.error("WebSocket error:", err);
+                    showAlert('Failed to connect to the recording server.', 'danger');
+                    if (mediaRecorder && mediaRecorder.state === 'recording') {
+                        mediaRecorder.stop();
+                    }
+                    resetRecordingUI();
                 };
                 
-                mediaRecorder.start(1000); 
-                
-                startBtn.style.display = 'none';
-                stopBtn.style.display = 'inline-block';
-                submitBtn.disabled = true;
-                recordingStatus.textContent = 'Recording...';
-            };
-
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                if (data.status === "recording_started") {
-                    recordingId = data.id;
-                    recordingIdInput.value = recordingId;
-                }
-            };
-
-            ws.onclose = () => {
-                submitBtn.disabled = false;
-            };
-
-            ws.onerror = (err) => {
-                console.error("WebSocket error:", err);
-                alert("Failed to connect to the recording server.");
-            };
+            } catch (error) {
+                console.error('Error starting recording:', error);
+                showAlert('Failed to start recording. Please try again.', 'danger');
+                resetRecordingUI();
+            }
         });
 
+        // Stop recording
         stopBtn.addEventListener('click', () => {
             if (mediaRecorder && mediaRecorder.state === 'recording') {
                 mediaRecorder.stop();
-                
-                // Stop the webcam feed
-                if (stream) {
-                    stream.getTracks().forEach(track => track.stop());
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.close();
                 }
-                webcamFeed.srcObject = null;
-                
-                startBtn.style.display = 'inline-block';
-                stopBtn.style.display = 'none';
             }
         });
+
+        // Update clip counter display
+        function updateClipCounter() {
+            clipCounter.textContent = `Clips: ${clipCount}`;
+        }
         
+        // Handle form submission
         const form = document.getElementById('uploadForm');
-        
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             
+            if (!folderName) {
+                showAlert('Please record a video before uploading.', 'danger');
+                return;
+            }
+
             const formData = new FormData(form);
 
             alertSuccess.style.display = 'none';
@@ -473,7 +615,7 @@
             
             progressContainer.style.display = 'block';
             progressBar.style.width = '0%';
-            status.textContent = 'Uploading...';
+            status.textContent = 'Uploading patient data and clips...';
             
             try {
                 const response = await fetch('/api/upload', {
@@ -487,16 +629,20 @@
                     progressBar.style.width = '100%';
                     status.textContent = 'Upload complete!';
                     
-                    alertSuccess.textContent = 'Data uploaded successfully!';
-                    alertSuccess.style.display = 'block';
+                    showAlert(`Data uploaded successfully! Folder: ${result.folder}, Clips: ${result.total_clips}`, 'success');
                     
+                    // Reset form
                     form.reset();
                     fileLabel.textContent = 'Click to select or drag files';
                     submitBtn.disabled = true;
+                    folderName = null;
+                    clipCount = 0;
+                    clipCounter.style.display = 'none';
+                    recordingStatus.textContent = 'Click Start Recording to begin';
                     
                     setTimeout(() => {
                         window.location.href = '/';
-                    }, 2000);
+                    }, 3000);
                 } else {
                     throw new Error(result.detail || 'Upload failed');
                 }
@@ -504,17 +650,17 @@
                 console.error('Upload error:', error);
                 progressBar.style.width = '0%';
                 status.textContent = 'Upload failed';
-                
-                alertDanger.textContent = `Error: ${error.message}`;
-                alertDanger.style.display = 'block';
+                showAlert(`Error: ${error.message}`, 'danger');
             } finally {
                 setTimeout(() => {
                     progressContainer.style.display = 'none';
-                }, 2000);
+                }, 3000);
             }
         });
 
+        // File upload handling
         fileUpload.addEventListener('click', () => fileInput.click());
+        
         fileInput.addEventListener('change', () => {
             if (fileInput.files.length > 0) {
                 fileLabel.textContent = fileInput.files.length > 1 
@@ -525,8 +671,16 @@
             }
         });
 
-        fileUpload.addEventListener('dragover', (e) => { e.preventDefault(); fileUpload.style.borderColor = 'var(--primary)'; });
-        fileUpload.addEventListener('dragleave', () => { fileUpload.style.borderColor = 'var(--border-color)'; });
+        // Drag and drop for files
+        fileUpload.addEventListener('dragover', (e) => { 
+            e.preventDefault(); 
+            fileUpload.style.borderColor = 'var(--primary)'; 
+        });
+        
+        fileUpload.addEventListener('dragleave', () => { 
+            fileUpload.style.borderColor = 'var(--border-color)'; 
+        });
+        
         fileUpload.addEventListener('drop', (e) => {
             e.preventDefault();
             fileUpload.style.borderColor = 'var(--border-color)';
@@ -538,17 +692,32 @@
             }
         });
 
+        // Update drive space periodically
         async function updateDriveSpace() {
-            const response = await fetch('/api/drive_space');
-            const data = await response.json();
-            
-            document.getElementById('space-used').textContent = data.used;
-            document.getElementById('space-total').textContent = data.total;
-            document.getElementById('space-percentage').textContent = `${data.percentage}%`;
-            document.querySelector('.space-used').style.width = `${data.percentage}%`;
+            try {
+                const response = await fetch('/api/drive_space');
+                const data = await response.json();
+                
+                document.getElementById('space-used').textContent = data.used;
+                document.getElementById('space-total').textContent = data.total;
+                document.getElementById('space-percentage').textContent = `${data.percentage}%`;
+                document.querySelector('.space-used').style.width = `${data.percentage}%`;
+            } catch (error) {
+                console.error('Error updating drive space:', error);
+            }
         }
         
+        // Initialize
         setInterval(updateDriveSpace, 30000);
+        startWebcam();
+        
+        // Prevent page navigation during recording
+        window.addEventListener('beforeunload', (e) => {
+            if (isRecording) {
+                e.preventDefault();
+                e.returnValue = 'Recording is in progress. Are you sure you want to leave?';
+            }
+        });
     </script>
 </body>
 </html>

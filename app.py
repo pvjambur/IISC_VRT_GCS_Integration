@@ -15,6 +15,15 @@ import cv2
 from starlette.websockets import WebSocket
 from starlette.websockets import WebSocketDisconnect
 import json
+import logging
+import threading
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+import asyncio
+
+# Configure logging to show info messages
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 drive_client = DriveClient()
@@ -25,23 +34,82 @@ templates = Jinja2Templates(directory="templates")
 
 # Directories
 CLIPS_CACHE_DIR = Path("static/clips_cache")
-RECORDINGS_DIR = Path("static/recordings")
+TEMP_DIR = Path("static/temp")
 CLIPS_CACHE_DIR.mkdir(exist_ok=True)
-RECORDINGS_DIR.mkdir(exist_ok=True)
+TEMP_DIR.mkdir(exist_ok=True)
 
 # OpenCV Cascade Classifier for face detection
-FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+try:
+    FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+except Exception as e:
+    logger.error(f"Error loading OpenCV cascade classifier: {e}. Face detection will be disabled.")
+    FACE_CASCADE = None
 
 # Global state for managing ongoing recordings
-recordings = {}
+active_recordings = {}
+
+class TempFolderHandler(FileSystemEventHandler):
+    """Handler for monitoring changes in temp folder"""
+    
+    def __init__(self, drive_client):
+        self.drive_client = drive_client
+        super().__init__()
+    
+    def on_created(self, event):
+        if event.is_directory:
+            return
+        
+        file_path = Path(event.src_path)
+        # Check if the created file is an MP4 inside a 'Clips' subfolder
+        if file_path.suffix == '.mp4' and file_path.parent.name == 'Clips':
+            folder_name = file_path.parent.parent.name  # DataX folder name
+            self.auto_upload_clip(folder_name, str(file_path))
+    
+    def auto_upload_clip(self, folder_name: str, clip_path: str):
+        """Automatically upload clip to Google Drive"""
+        try:
+            clips_drive_path = f"{folder_name}/Clips"
+            clip_filename = Path(clip_path).name
+            
+            logger.info(f"Auto-uploading clip: {clip_filename} to {clips_drive_path}")
+            file_id = self.drive_client.upload_to_drive(clips_drive_path, clip_path, file_name=clip_filename)
+            logger.info(f"Successfully uploaded {clip_filename} with ID: {file_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to auto-upload clip {clip_path}: {e}")
+            # Don't raise the exception to prevent the file watcher from stopping
+
+# Initialize file system watcher
+temp_handler = TempFolderHandler(drive_client)
+observer = Observer()
+observer.schedule(temp_handler, str(TEMP_DIR), recursive=True)
+observer.start()
 
 # Utility functions
+
+def get_next_data_folder() -> str:
+    """Get the next available DataX folder name"""
+    # Use drive client to get consistent numbering with Google Drive
+    return drive_client.get_next_folder_name_from_drive()
+
+def create_recording_folder() -> tuple[str, Path, Path]:
+    """Create a new DataX folder with a Clips subfolder"""
+    folder_name = get_next_data_folder()
+    folder_path = TEMP_DIR / folder_name
+    clips_path = folder_path / "Clips"
+    
+    folder_path.mkdir(exist_ok=True)
+    clips_path.mkdir(exist_ok=True)
+    
+    logger.info(f"Created recording folder: {folder_path} with Clips subfolder: {clips_path}")
+    return folder_name, folder_path, clips_path
 
 def segment_video(video_path: str, clip_duration: int = 15) -> List[str]:
     """
     Segment video into clips of specified duration.
     Returns list of clip file paths.
     """
+    logger.info(f"Starting video segmentation for {video_path}")
     try:
         duration_cmd = [
             'ffprobe', '-v', 'error', '-show_entries',
@@ -76,11 +144,14 @@ def segment_video(video_path: str, clip_duration: int = 15) -> List[str]:
             subprocess.run(cmd, capture_output=True, check=True)
             clip_paths.append(str(clip_path))
         
+        logger.info(f"Video segmentation complete. {len(clip_paths)} clips created.")
         return clip_paths
     
     except subprocess.CalledProcessError as e:
+        logger.error(f"FFmpeg error: {e.stderr.strip()}")
         raise Exception(f"FFmpeg error: {e.stderr.strip()}")
     except Exception as e:
+        logger.error(f"Video segmentation failed: {str(e)}")
         raise Exception(f"Video segmentation failed: {str(e)}")
 
 def generate_video_stream(video_path: str, apply_opencv: bool = False):
@@ -117,7 +188,7 @@ def get_video_duration(video_path: str) -> float:
         result = subprocess.run(duration_cmd, capture_output=True, text=True, check=True)
         return float(result.stdout.strip())
     except subprocess.CalledProcessError as e:
-        print(f"Error getting duration: {e.stderr.strip()}")
+        logger.error(f"Error getting duration: {e.stderr.strip()}")
         return 0.0
 
 def stitch_clips(clip_paths: List[str], output_path: str):
@@ -133,8 +204,9 @@ def stitch_clips(clip_paths: List[str], output_path: str):
     
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
+        logger.info(f"Clips stitched successfully to {output_path}")
     except subprocess.CalledProcessError as e:
-        print(f"FFmpeg stitching error: {e.stderr}")
+        logger.error(f"FFmpeg stitching error: {e.stderr}")
         raise
     finally:
         list_file_path.unlink(missing_ok=True)
@@ -177,24 +249,17 @@ async def upload_data(
     age: str = Form(...),
     gender: str = Form(...),
     condition: str = Form(...),
-    recording_id: str = Form(...),
-    other_files: List[UploadFile] = File(None),
-    clip_duration: int = Form(15)
+    folder_name: str = Form(...),
+    clip_duration: int = Form(15),
+    other_files: List[UploadFile] = File(None)
 ):
     try:
-        original_video_path = recordings.get(recording_id)
-        if not original_video_path or not Path(original_video_path).exists():
-            raise HTTPException(status_code=400, detail="Recording not found.")
+        # Check if the folder exists in temp
+        folder_path = TEMP_DIR / folder_name
+        if not folder_path.exists():
+            raise HTTPException(status_code=400, detail="Recording folder not found.")
 
-        folder_name, folder_path = drive_client.create_local_folder()
-
-        # Rename and move the original video
-        timestamp = str(int(time.time()))
-        unique_id = str(uuid.uuid4())[:8]
-        video_ext = os.path.splitext(original_video_path)[1]
-        original_video_filename = f"original_video_{timestamp}_{unique_id}{video_ext}"
-        final_video_path = Path(folder_path) / original_video_filename
-        shutil.move(original_video_path, final_video_path)
+        logger.info(f"Processing upload for folder: {folder_path}")
 
         # Create patient.txt
         info_content = (
@@ -203,58 +268,44 @@ async def upload_data(
             f"Clip Duration: {clip_duration}s"
         )
         info_filename = "patient.txt"
-        info_path = Path(folder_path) / info_filename
+        info_path = folder_path / info_filename
         with open(info_path, "w") as f:
             f.write(info_content)
+        logger.info(f"Created patient info file: {info_path}")
 
         # Handle other files
-        patient_info_dir = Path(folder_path) / "patient_info"
+        patient_info_dir = folder_path / "patient_info"
         patient_info_dir.mkdir(exist_ok=True)
         uploaded_other_files = []
         if other_files:
             for file in other_files:
-                file_path = patient_info_dir / file.filename
-                with open(file_path, "wb") as buffer:
-                    shutil.copyfileobj(file.file, buffer)
-                drive_client.upload_to_drive(f"{folder_name}/patient_info", str(file_path))
-                uploaded_other_files.append(file.filename)
+                if file.filename:  # Check if file has a name
+                    file_path = patient_info_dir / file.filename
+                    with open(file_path, "wb") as buffer:
+                        shutil.copyfileobj(file.file, buffer)
+                    drive_client.upload_to_drive(f"{folder_name}/patient_info", str(file_path))
+                    uploaded_other_files.append(file.filename)
+            logger.info(f"Uploaded {len(uploaded_other_files)} additional files.")
         
-        # Segment and upload clips
-        print(f"Segmenting video into {clip_duration}s clips...")
-        clip_paths = segment_video(str(final_video_path), clip_duration)
-        
-        clips_folder_name = f"{folder_name}/Clips"
-        uploaded_clips = []
-        for i, clip_path in enumerate(clip_paths, 1):
-            clip_filename = f"Clip{i:03d}.mp4"
-            drive_client.upload_to_drive(clips_folder_name, clip_path, file_name=clip_filename)
-            uploaded_clips.append(clip_filename)
-        
-        # Upload main files
-        drive_client.upload_to_drive(folder_name, str(final_video_path))
+        # Upload patient.txt to drive
         drive_client.upload_to_drive(folder_name, str(info_path))
         
-        # Clean up the local recording
-        del recordings[recording_id]
-
-        drive_client.local_folders = drive_client._scan_local_folders()
+        # Get list of clips that were already uploaded automatically
+        clips = drive_client.get_clips_in_folder(folder_name)
         
         return JSONResponse({
             "status": "success",
             "folder": folder_name,
-            "clips_folder": clips_folder_name,
-            "original_video": original_video_filename,
+            "clips_folder": f"{folder_name}/Clips",
             "info": info_filename,
-            "clips": uploaded_clips,
-            "total_clips": len(clip_paths),
-            "clip_duration": clip_duration
+            "total_clips": len(clips),
+            "clips": clips,
+            "clip_duration": clip_duration,
+            "other_files": uploaded_other_files
         })
     
     except Exception as e:
-        if 'folder_path' in locals() and os.path.exists(folder_path):
-            shutil.rmtree(folder_path, ignore_errors=True)
-        if 'original_video_path' in locals() and os.path.exists(original_video_path):
-            os.remove(original_video_path)
+        logger.error(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/verification")
@@ -311,29 +362,60 @@ async def play_video_stream(folder_name: str, apply_opencv: bool = False):
 async def record_websocket(websocket: WebSocket):
     await websocket.accept()
     
-    recording_id = str(uuid.uuid4())
-    temp_file_path = RECORDINGS_DIR / f"{recording_id}.webm"
-    recordings[recording_id] = str(temp_file_path)
-    
     try:
-        # Send a message to the client indicating the recording has started and provide the ID
-        await websocket.send_json({"status": "recording_started", "id": recording_id})
-        print(f"WebSocket connection opened. Recording ID: {recording_id}")
-
-        # Use a context manager for the file to ensure it's closed correctly
-        with open(temp_file_path, 'wb') as f:
-            while True:
-                # Receive data from the client
+        # Create recording folder structure
+        folder_name, folder_path, clips_path = create_recording_folder()
+        
+        # Send the folder name to the client
+        await websocket.send_json({
+            "status": "recording_started",
+            "folder_name": folder_name,
+            "clips_path": str(clips_path)
+        })
+        
+        logger.info(f"WebSocket connection opened. Folder: {folder_name}")
+        
+        clip_number = 1
+        
+        while True:
+            try:
+                # Receive the full video clip as binary data
                 data = await websocket.receive_bytes()
-                f.write(data)
+                
+                if data:
+                    clip_filename = f"Clip{clip_number:03d}.webm"
+                    clip_path = clips_path / clip_filename
+                    
+                    with open(clip_path, 'wb') as f:
+                        f.write(data)
+                        
+                    logger.info(f"Received and saved clip: {clip_path}")
+                    
+                    # Notify client about new clip
+                    await websocket.send_json({
+                        "status": "new_clip_saved",
+                        "clip_number": clip_number
+                    })
+                    
+                    clip_number += 1
+            
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"Error during recording: {e}")
+                break
 
     except WebSocketDisconnect:
-        # This exception is raised when the client closes the connection.
-        print(f"Client disconnected from recording {recording_id}")
-
+        logger.info(f"Client disconnected from recording")
     except Exception as e:
-        print(f"An error occurred during recording: {e}")
-
+        logger.error(f"An error occurred during recording: {e}")
     finally:
-        # This block runs after the `try` or `except` block completes.
-        print(f"Finished recording session {recording_id}. File saved at {temp_file_path}")
+        # Clean up active recording (if any)
+        if 'folder_name' in locals() and folder_name in active_recordings:
+            del active_recordings[folder_name]
+        logger.info(f"Recording session ended")
+
+@app.on_event("shutdown")
+def shutdown_event():
+    observer.stop()
+    observer.join()
