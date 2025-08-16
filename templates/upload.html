@@ -15,140 +15,157 @@
             --danger: #f72585;
             --warning: #f8961e;
             --info: #560bad;
+            --background-color: var(--light);
+            --text-color: var(--dark);
+            --card-background: white;
+            --border-color: #ddd;
         }
-        
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --background-color: #121212;
+                --text-color: #e0e0e0;
+                --card-background: #1e1e1e;
+                --border-color: #333;
+                --primary: #4e70e0;
+                --secondary: #3f51b5;
+                --danger: #ff6090;
+                --success: #00bcd4;
+                --warning: #fbc02d;
+            }
         }
         
         body {
             display: flex;
             min-height: 100vh;
-            background-color: #f5f7fa;
+            background-color: var(--background-color);
+            color: var(--text-color);
+            transition: background-color 0.3s, color 0.3s;
         }
-        
+
         .sidebar {
             width: 250px;
-            background: white;
+            background: var(--card-background);
             box-shadow: 2px 0 10px rgba(0,0,0,0.1);
             padding: 20px 0;
+            transition: background 0.3s;
         }
-        
+
         .sidebar-header {
             padding: 0 20px 20px;
-            border-bottom: 1px solid #eee;
+            border-bottom: 1px solid var(--border-color);
         }
-        
+
         .sidebar-header h2 {
             color: var(--primary);
         }
-        
+
         .sidebar-menu {
             list-style: none;
             margin-top: 20px;
         }
-        
+
         .sidebar-menu li {
             margin-bottom: 5px;
         }
-        
+
         .sidebar-menu a {
             display: block;
             padding: 12px 20px;
-            color: var(--dark);
+            color: var(--text-color);
             text-decoration: none;
             transition: all 0.3s;
             border-left: 3px solid transparent;
         }
-        
+
         .sidebar-menu a:hover, .sidebar-menu a.active {
             background: rgba(67, 97, 238, 0.1);
             border-left: 3px solid var(--primary);
             color: var(--primary);
         }
-        
-        .sidebar-menu i {
+        .sidebar-menu a i {
             margin-right: 10px;
         }
-        
+
         .main-content {
             flex: 1;
             padding: 30px;
         }
-        
+
         .header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 30px;
         }
-        
+
         .header h1 {
-            color: var(--dark);
+            color: var(--text-color);
         }
-        
+
         .drive-space {
-            background: white;
+            background: var(--card-background);
             padding: 15px;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.05);
             display: flex;
             align-items: center;
+            transition: background 0.3s;
         }
-        
+
         .space-meter {
             width: 150px;
             height: 10px;
-            background: #eee;
+            background: var(--border-color);
             border-radius: 5px;
             margin: 0 10px;
             overflow: hidden;
         }
-        
+
         .space-used {
             height: 100%;
             background: var(--primary);
             border-radius: 5px;
         }
-        
+
         .upload-container {
-            background: white;
+            background: var(--card-background);
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.05);
             padding: 30px;
             max-width: 800px;
             margin: 0 auto;
+            transition: background 0.3s;
         }
-        
+
         .form-group {
             margin-bottom: 20px;
         }
-        
+
         label {
             display: block;
             margin-bottom: 8px;
             font-weight: 500;
-            color: var(--dark);
+            color: var(--text-color);
         }
-        
+
         input, select, textarea {
             width: 100%;
             padding: 12px;
-            border: 1px solid #ddd;
+            border: 1px solid var(--border-color);
             border-radius: 6px;
             font-size: 16px;
             transition: all 0.3s;
+            background: var(--background-color);
+            color: var(--text-color);
         }
-        
+
         input:focus, select:focus, textarea:focus {
             border-color: var(--primary);
             outline: none;
             box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.2);
         }
-        
+
         .btn {
             background: var(--primary);
             color: white;
@@ -161,78 +178,97 @@
             transition: all 0.3s;
             display: inline-block;
         }
-        
+
         .btn:hover {
             background: var(--secondary);
         }
-        
+
         .btn-block {
             display: block;
             width: 100%;
         }
-        
+
         .file-upload {
             display: flex;
             flex-direction: column;
             align-items: center;
             padding: 40px;
-            border: 2px dashed #ddd;
+            border: 2px dashed var(--border-color);
             border-radius: 6px;
             margin-bottom: 20px;
             cursor: pointer;
             transition: all 0.3s;
         }
-        
+
         .file-upload:hover {
             border-color: var(--primary);
         }
-        
+
         .file-upload i {
             font-size: 48px;
             color: var(--primary);
             margin-bottom: 15px;
         }
-        
+
         .file-upload input {
             display: none;
         }
-        
+
         .progress-container {
             margin-top: 20px;
             display: none;
         }
-        
+
         .progress-bar {
             height: 10px;
-            background: #eee;
+            background: var(--border-color);
             border-radius: 5px;
             overflow: hidden;
         }
-        
+
         .progress {
             height: 100%;
             background: var(--success);
             width: 0%;
             transition: width 0.3s;
         }
-        
+
         .alert {
             padding: 15px;
             border-radius: 6px;
             margin-bottom: 20px;
             display: none;
         }
-        
+
         .alert-success {
             background: rgba(76, 201, 240, 0.1);
             border-left: 4px solid var(--success);
-            color: var(--dark);
+            color: var(--text-color);
         }
-        
+
         .alert-danger {
             background: rgba(247, 37, 133, 0.1);
             border-left: 4px solid var(--danger);
-            color: var(--dark);
+            color: var(--text-color);
+        }
+
+        .video-controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .video-container {
+            border: 1px solid var(--border-color);
+            background: #000;
+            position: relative;
+        }
+
+        #webcam-feed {
+            width: 100%;
+            height: auto;
+            display: block;
         }
     </style>
 </head>
@@ -242,8 +278,9 @@
             <h2>Patient Data</h2>
         </div>
         <ul class="sidebar-menu">
-            <li><a href="/"><i>📊</i> Dashboard</a></li>
-            <li><a href="/upload" class="active"><i>📤</i> Upload Data</a></li>
+            <li><a href="/"><i class="fas fa-chart-line">📊</i> Viewer Dashboard</a></li>
+            <li><a href="/verifier"><i class="fas fa-clipboard-check">📋</i> Verifier Dashboard</a></li>
+            <li><a href="/upload" class="active"><i class="fas fa-cloud-upload-alt">📤</i> Upload Data</a></li>
         </ul>
     </div>
     
@@ -288,80 +325,152 @@
                     <label for="condition">Condition Details</label>
                     <textarea id="condition" name="condition" rows="3" required></textarea>
                 </div>
-                
+
                 <div class="form-group">
-                    <label>Video File</label>
-                    <div class="file-upload" id="fileUpload">
-                        <i>📁</i>
-                        <span id="fileLabel">Click to select or drag video file</span>
-                        <input type="file" id="video" name="video" accept="video/*" required>
+                    <label>Record Video from Webcam</label>
+                    <div class="video-container">
+                        <video id="webcam-feed" playsinline></video>
+                    </div>
+                    <div class="video-controls">
+                        <button type="button" class="btn" id="start-record">Start Recording</button>
+                        <button type="button" class="btn" id="stop-record" style="display: none;">Stop Recording</button>
+                        <span id="recording-status" style="margin-left: 10px;">Webcam is off.</span>
+                        <input type="hidden" id="recording-id" name="recording_id">
                     </div>
                 </div>
                 
-                <button type="submit" class="btn btn-block">Upload Data</button>
+                <div class="form-group">
+                    <label for="other_files">Additional Documents (PDF, etc.)</label>
+                    <div class="file-upload" id="otherFileUpload">
+                        <i class="fas fa-cloud-upload-alt">📁</i>
+                        <span id="otherFileLabel">Click to select or drag files</span>
+                        <input type="file" id="other_files" name="other_files" multiple>
+                    </div>
+                </div>
+                
+                <button type="submit" class="btn btn-block" id="submit-btn" disabled>Upload Data</button>
             </form>
             
             <div class="progress-container" id="progressContainer">
                 <div class="progress-bar">
                     <div class="progress" id="progress"></div>
                 </div>
-                <div id="status" style="text-align: center; margin-top: 10px;">Uploading...</div>
+                <div id="status" style="text-align: center; margin-top: 10px;"></div>
             </div>
         </div>
     </div>
     
     <script>
-        // File upload UI
-        const fileUpload = document.getElementById('fileUpload');
-        const fileInput = document.getElementById('video');
-        const fileLabel = document.getElementById('fileLabel');
-        
-        fileUpload.addEventListener('click', () => fileInput.click());
-        
-        fileInput.addEventListener('change', () => {
-            if (fileInput.files.length > 0) {
-                fileLabel.textContent = fileInput.files[0].name;
-            }
-        });
-        
-        // Drag and drop
-        fileUpload.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            fileUpload.style.borderColor = '#4361ee';
-        });
-        
-        fileUpload.addEventListener('dragleave', () => {
-            fileUpload.style.borderColor = '#ddd';
-        });
-        
-        fileUpload.addEventListener('drop', (e) => {
-            e.preventDefault();
-            fileUpload.style.borderColor = '#ddd';
-            
-            if (e.dataTransfer.files.length > 0) {
-                fileInput.files = e.dataTransfer.files;
-                fileLabel.textContent = e.dataTransfer.files[0].name;
-            }
-        });
-        
-        // Form submission
-        const form = document.getElementById('uploadForm');
+        const fileUpload = document.getElementById('otherFileUpload');
+        const fileInput = document.getElementById('other_files');
+        const fileLabel = document.getElementById('otherFileLabel');
+        const webcamFeed = document.getElementById('webcam-feed');
+        const startBtn = document.getElementById('start-record');
+        const stopBtn = document.getElementById('stop-record');
+        const submitBtn = document.getElementById('submit-btn');
+        const recordingStatus = document.getElementById('recording-status');
+        const recordingIdInput = document.getElementById('recording-id');
+        const alertSuccess = document.getElementById('alert-success');
+        const alertDanger = document.getElementById('alert-danger');
         const progressContainer = document.getElementById('progressContainer');
         const progressBar = document.getElementById('progress');
         const status = document.getElementById('status');
-        const alertSuccess = document.getElementById('alert-success');
-        const alertDanger = document.getElementById('alert-danger');
+
+        let mediaRecorder;
+        let ws;
+        let recordingId;
+        let stream;
+
+        async function startWebcam() {
+            try {
+                // Request access to webcam and microphone
+                stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                webcamFeed.srcObject = stream;
+                webcamFeed.play();
+                recordingStatus.textContent = 'Webcam is active.';
+                return stream;
+            } catch (err) {
+                console.error("Error accessing webcam:", err);
+                alert("Could not access webcam. Please check permissions.");
+                return null;
+            }
+        }
+
+        startBtn.addEventListener('click', async () => {
+            const mediaStream = await startWebcam();
+            if (!mediaStream) return;
+
+            // Connect to WebSocket and start recording
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws/record`);
+            
+            ws.onopen = () => {
+                mediaRecorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm; codecs=vp9' });
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        ws.send(event.data);
+                    }
+                };
+                
+                mediaRecorder.onstop = () => {
+                    if (ws) {
+                        ws.close();
+                    }
+                    recordingStatus.textContent = 'Recording complete! You can now upload.';
+                };
+                
+                mediaRecorder.start(1000); 
+                
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'inline-block';
+                submitBtn.disabled = true;
+                recordingStatus.textContent = 'Recording...';
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.status === "recording_started") {
+                    recordingId = data.id;
+                    recordingIdInput.value = recordingId;
+                }
+            };
+
+            ws.onclose = () => {
+                submitBtn.disabled = false;
+            };
+
+            ws.onerror = (err) => {
+                console.error("WebSocket error:", err);
+                alert("Failed to connect to the recording server.");
+            };
+        });
+
+        stopBtn.addEventListener('click', () => {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+                
+                // Stop the webcam feed
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                webcamFeed.srcObject = null;
+                
+                startBtn.style.display = 'inline-block';
+                stopBtn.style.display = 'none';
+            }
+        });
+        
+        const form = document.getElementById('uploadForm');
         
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             
             const formData = new FormData(form);
-            
-            // Hide alerts
+
             alertSuccess.style.display = 'none';
             alertDanger.style.display = 'none';
             
-            // Show progress
             progressContainer.style.display = 'block';
             progressBar.style.width = '0%';
             status.textContent = 'Uploading...';
@@ -378,27 +487,24 @@
                     progressBar.style.width = '100%';
                     status.textContent = 'Upload complete!';
                     
-                    // Show success message
                     alertSuccess.textContent = 'Data uploaded successfully!';
                     alertSuccess.style.display = 'block';
                     
-                    // Reset form
                     form.reset();
-                    fileLabel.textContent = 'Click to select or drag video file';
+                    fileLabel.textContent = 'Click to select or drag files';
+                    submitBtn.disabled = true;
                     
-                    // Redirect after 2 seconds
                     setTimeout(() => {
                         window.location.href = '/';
                     }, 2000);
                 } else {
-                    throw new Error(result.message || 'Upload failed');
+                    throw new Error(result.detail || 'Upload failed');
                 }
             } catch (error) {
                 console.error('Upload error:', error);
                 progressBar.style.width = '0%';
                 status.textContent = 'Upload failed';
                 
-                // Show error message
                 alertDanger.textContent = `Error: ${error.message}`;
                 alertDanger.style.display = 'block';
             } finally {
@@ -407,8 +513,31 @@
                 }, 2000);
             }
         });
-        
-        // Update drive space periodically
+
+        fileUpload.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length > 0) {
+                fileLabel.textContent = fileInput.files.length > 1 
+                    ? `${fileInput.files.length} files selected` 
+                    : fileInput.files[0].name;
+            } else {
+                fileLabel.textContent = 'Click to select or drag files';
+            }
+        });
+
+        fileUpload.addEventListener('dragover', (e) => { e.preventDefault(); fileUpload.style.borderColor = 'var(--primary)'; });
+        fileUpload.addEventListener('dragleave', () => { fileUpload.style.borderColor = 'var(--border-color)'; });
+        fileUpload.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileUpload.style.borderColor = 'var(--border-color)';
+            if (e.dataTransfer.files.length > 0) {
+                fileInput.files = e.dataTransfer.files;
+                fileLabel.textContent = e.dataTransfer.files.length > 1
+                    ? `${e.dataTransfer.files.length} files selected`
+                    : e.dataTransfer.files[0].name;
+            }
+        });
+
         async function updateDriveSpace() {
             const response = await fetch('/api/drive_space');
             const data = await response.json();

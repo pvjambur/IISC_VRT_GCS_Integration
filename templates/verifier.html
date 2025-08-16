@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patient Data Dashboard</title>
+    <style>
+        :root {
+            --primary: #4361ee;
+            --secondary: #3f37c9;
+            --accent: #4895ef;
+            --light: #f8f9fa;
+            --dark: #212529;
+            --success: #4cc9f0;
+            --danger: #f72585;
+            --warning: #f8961e;
+            --info: #560bad;
+            --background-color: var(--light);
+            --text-color: var(--dark);
+            --card-background: white;
+            --border-color: #eee;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --background-color: #121212;
+                --text-color: #e0e0e0;
+                --card-background: #1e1e1e;
+                --border-color: #333;
+                --primary: #4e70e0;
+                --secondary: #3f51b5;
+                --danger: #ff6090;
+                --success: #00bcd4;
+                --warning: #fbc02d;
+            }
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { display: flex; min-height: 100vh; background-color: var(--background-color); color: var(--text-color); transition: background-color 0.3s, color 0.3s; }
+        .sidebar { width: 250px; background: var(--card-background); box-shadow: 2px 0 10px rgba(0,0,0,0.1); padding: 20px 0; transition: background 0.3s; }
+        .sidebar-header { padding: 0 20px 20px; border-bottom: 1px solid var(--border-color); }
+        .sidebar-header h2 { color: var(--primary); }
+        .sidebar-menu { list-style: none; margin-top: 20px; }
+        .sidebar-menu li { margin-bottom: 5px; }
+        .sidebar-menu a { display: block; padding: 12px 20px; color: var(--text-color); text-decoration: none; transition: all 0.3s; border-left: 3px solid transparent; }
+        .sidebar-menu a:hover, .sidebar-menu a.active { background: rgba(67, 97, 238, 0.1); border-left: 3px solid var(--primary); color: var(--primary); }
+        .sidebar-menu i { margin-right: 10px; }
+        .main-content { flex: 1; padding: 30px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        .header h1 { color: var(--text-color); }
+        .drive-space { background: var(--card-background); padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; align-items: center; transition: background 0.3s; }
+        .space-meter { width: 150px; height: 10px; background: var(--border-color); border-radius: 5px; margin: 0 10px; overflow: hidden; }
+        .space-used { height: 100%; background: var(--primary); border-radius: 5px; }
+        .data-table { background: var(--card-background); border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); overflow: hidden; transition: background 0.3s; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 15px; text-align: left; border-bottom: 1px solid var(--border-color); }
+        th { background: var(--light); font-weight: 600; color: var(--dark); }
+        tr:hover { background: rgba(67, 97, 238, 0.05); }
+        .video-link { color: var(--primary); text-decoration: none; font-weight: 500; cursor: pointer; }
+        .video-link:hover { text-decoration: underline; }
+        .video-link.disabled {
+            color: grey;
+            cursor: not-allowed;
+            text-decoration: none;
+        }
+        .video-link.disabled:hover {
+            text-decoration: none;
+        }
+        .status-badge { display: inline-block; padding: 5px 10px; border-radius: 5px; font-weight: bold; color: white; }
+        .status-pending { background-color: var(--warning); }
+        .status-approved { background-color: var(--success); }
+        .status-rejected { background-color: var(--danger); }
+        .fullscreen-warning { display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 9999; background: rgba(255, 0, 0, 0.7); color: white; text-align: center; padding: 10px; font-size: 1.2em; }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h2>Patient Data</h2>
+        </div>
+        <ul class="sidebar-menu">
+            <li><a href="/" class="active"><i class="fas fa-chart-line">📊</i> Viewer Dashboard</a></li>
+            <li><a href="/verifier"><i class="fas fa-clipboard-check">📋</i> Verifier Dashboard</a></li>
+            <li><a href="/upload"><i class="fas fa-cloud-upload-alt">📤</i> Upload Data</a></li>
+        </ul>
+    </div>
+    
+    <div class="main-content">
+        <div class="header">
+            <h1>Viewer Records</h1>
+            <div class="drive-space">
+                <span>Drive: <span id="space-used">{{ drive_space.used }}</span>GB / <span id="space-total">{{ drive_space.total }}</span>GB</span>
+                <div class="space-meter">
+                    <div class="space-used" style="width: {{ drive_space.percentage | default(0) }}%"></div>
+                </div>
+                <span id="space-percentage">{{ drive_space.percentage }}%</span>
+            </div>
+        </div>
+        
+        <div class="data-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Folder</th>
+                        <th>Name</th>
+                        <th>Age</th>
+                        <th>Gender</th>
+                        <th>Condition</th>
+                        <th>Status</th>
+                        <th>Video</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in data %}
+                    <tr>
+                        <td>{{ item.folder }}</td>
+                        <td>{{ item.info.content.Name }}</td>
+                        <td>{{ item.info.content.Age }}</td>
+                        <td>{{ item.info.content.Gender }}</td>
+                        <td>{{ item.info.content.Condition }}</td>
+                        <td>
+                            <span class="status-badge status-{{ item.status.lower() }}">{{ item.status }}</span>
+                        </td>
+                        <td>
+                            <a class="video-link {% if item.status != 'Approved' %}disabled{% endif %}" href="#" onclick="openVideoWindow('{{ item.folder }}', '{{ item.status }}'); return false;">View Video</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <div id="fullscreen-warning" class="fullscreen-warning">
+        WARNING: Attempting to enter full-screen mode is not allowed for security purposes.
+    </div>
+
+    <script>
+        function openVideoWindow(folderName, status) {
+            // Only allow opening if the status is Approved
+            if (status !== 'Approved') {
+                alert("This video has not been approved for viewing yet.");
+                return;
+            }
+
+            const videoUrl = `/api/videos/${folderName}/play`;
+            const windowName = `video_viewer_${folderName}`;
+            
+            const viewerWindow = window.open('', windowName, 'width=800,height=600');
+            if (!viewerWindow) {
+                alert("Please allow pop-ups for this site to view the video.");
+                return;
+            }
+
+            viewerWindow.document.write(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Patient Video - ${folderName}</title>
+                    <style>
+                        body, html {
+                            margin: 0; padding: 0; overflow: hidden; background-color: black;
+                            display: flex; justify-content: center; align-items: center;
+                            height: 100vh; width: 100vw;
+                        }
+                        img { width: 100%; height: auto; max-width: 100%; max-height: 100%; }
+                        #warning { display: none; color: white; background: rgba(255,0,0,0.8); padding: 10px; z-index: 10; font-size: 1.2em; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); border-radius: 8px; }
+                    </style>
+                </head>
+                <body>
+                    <img src="${videoUrl}" alt="Video Stream">
+                    <div id="warning">Screen capture is disabled for this video.</div>
+                    <script>
+                        const warning = document.getElementById('warning');
+                        let timeout;
+            
+                        function showWarning() {
+                            warning.style.display = 'block';
+                            clearTimeout(timeout);
+                            timeout = setTimeout(() => {
+                                warning.style.display = 'none';
+                            }, 2000);
+                        }
+                        
+                        document.addEventListener('keydown', (e) => {
+                            if ((e.ctrlKey && e.key === 'p') || (e.ctrlKey && e.key === 's') || (e.key === 'PrintScreen')) {
+                                e.preventDefault();
+                                showWarning();
+                            }
+                        });
+                    <\/script>
+                </body>
+                </html>
+            `);
+
+            viewerWindow.focus();
+        }
+
+        async function updateDriveSpace() {
+            const response = await fetch('/api/drive_space');
+            const data = await response.json();
+            
+            document.getElementById('space-used').textContent = data.used;
+            document.getElementById('space-total').textContent = data.total;
+            document.getElementById('space-percentage').textContent = `${data.percentage}%`;
+            document.querySelector('.space-used').style.width = `${data.percentage}%`;
+        }
+        
+        setInterval(updateDriveSpace, 30000);
+    </script>
+</body>
+</html>
