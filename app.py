@@ -1,421 +1,396 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request, BackgroundTasks
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
-from pathlib import Path
 import os
-import time
-import shutil
-from drive_client import DriveClient
-import uuid
-import subprocess
-import tempfile
-from typing import List, Optional
-import cv2
-from starlette.websockets import WebSocket
-from starlette.websockets import WebSocketDisconnect
+import csv
 import json
-import logging
-import threading
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
+import uuid
+import pandas as pd
+from fastapi import FastAPI, UploadFile, File, HTTPException, status
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+from drive_client import DriveClient
+from pathlib import Path
 import asyncio
+import aiofiles
+import logging
+import shutil
 
-# Configure logging to show info messages
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-drive_client = DriveClient()
 
-# Mount static files and templates
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Directories
-CLIPS_CACHE_DIR = Path("static/clips_cache")
-TEMP_DIR = Path("static/temp")
-CLIPS_CACHE_DIR.mkdir(exist_ok=True)
-TEMP_DIR.mkdir(exist_ok=True)
-
-# OpenCV Cascade Classifier for face detection
 try:
-    FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    drive_client = DriveClient()
 except Exception as e:
-    logger.error(f"Error loading OpenCV cascade classifier: {e}. Face detection will be disabled.")
-    FACE_CASCADE = None
+    logger.error(f"Failed to initialize DriveClient: {e}. The app may not function as expected.")
+    drive_client = None
 
-# Global state for managing ongoing recordings
-active_recordings = {}
+USERS_DB = "user.csv"
+DATA_DB = "data.csv"
+STATIC_DIR = "static"
+TEMP_DIR = Path(STATIC_DIR) / "temp"
+CLIPS_CACHE_DIR = Path(STATIC_DIR) / "clips_cache"
 
-class TempFolderHandler(FileSystemEventHandler):
-    """Handler for monitoring changes in temp folder"""
-    
-    def __init__(self, drive_client):
-        self.drive_client = drive_client
-        super().__init__()
-    
-    def on_created(self, event):
-        if event.is_directory:
-            return
-        
-        file_path = Path(event.src_path)
-        # Check if the created file is an MP4 inside a 'Clips' subfolder
-        if file_path.suffix == '.mp4' and file_path.parent.name == 'Clips':
-            folder_name = file_path.parent.parent.name  # DataX folder name
-            self.auto_upload_clip(folder_name, str(file_path))
-    
-    def auto_upload_clip(self, folder_name: str, clip_path: str):
-        """Automatically upload clip to Google Drive"""
+Path(STATIC_DIR).mkdir(exist_ok=True)
+TEMP_DIR.mkdir(exist_ok=True)
+CLIPS_CACHE_DIR.mkdir(exist_ok=True)
+
+if not Path(USERS_DB).exists():
+    with open(USERS_DB, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["email", "password", "role"])
+
+def seed_data_csv():
+    if Path(DATA_DB).stat().st_size == 0:
+        sample_data = [
+            {
+                "Folder_Name": "UHID12345",
+                "JSON_Details": json.dumps({
+                    "Name": "Aarav Sharma", "Age": "2 months", "Gender": "Male", "DOB": "2025-05-12",
+                    "CDoB": "2025-05-20", "GA": "38 weeks", "ChronoAge": "2 months 1 week",
+                    "Location": "Mumbai, India", "DeviceInfo": "Samsung Galaxy Tab S8", "Comments": "",
+                    "GMAE_status": "Pending", "VideoQ_status": "Good"
+                }),
+                "VideoQ_status": "Good", "GMAE_status": "Pending"
+            },
+            {
+                "Folder_Name": "UHID55678",
+                "JSON_Details": json.dumps({
+                    "Name": "Aarav Gupta", "Age": "2 months", "Gender": "Male", "DOB": "2025-05-12",
+                    "CDoB": "2025-05-20", "GA": "38 weeks", "ChronoAge": "2 months 1 week",
+                    "Location": "Mumbai, India", "DeviceInfo": "Samsung Galaxy Tab S8", "Comments": "",
+                    "GMAE_status": "Approved", "VideoQ_status": "Good"
+                }),
+                "VideoQ_status": "Good", "GMAE_status": "Approved"
+            },
+            {
+                "Folder_Name": "UHID44567",
+                "JSON_Details": json.dumps({
+                    "Name": "Kavya Iyer", "Age": "3 months", "Gender": "Female", "DOB": "2025-04-01",
+                    "CDoB": "2025-04-08", "GA": "38 weeks", "ChronoAge": "3 months 1 week",
+                    "Location": "Bangalore, India", "DeviceInfo": "iPad Air", "Comments": "Poor video quality, retake required.",
+                    "GMAE_status": "Rejected", "VideoQ_status": "Poor"
+                }),
+                "VideoQ_status": "Poor", "GMAE_status": "Rejected"
+            }
+        ]
+        df = pd.DataFrame(sample_data)
+        df.to_csv(DATA_DB, index=False)
+        print("Seeded data.csv with initial data.")
+
+if not Path(DATA_DB).exists():
+    with open(DATA_DB, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Folder_Name", "JSON_Details", "VideoQ_status", "GMAE_status"])
+    seed_data_csv()
+else:
+    # Check if the file is empty and seed if so
+    if Path(DATA_DB).stat().st_size == 0:
+        seed_data_csv()
+
+
+# Pydantic models
+class User(BaseModel):
+    email: str
+    password: str
+
+class UserSignup(BaseModel):
+    fullName: str
+    email: str
+    phone: str
+    password: str
+
+class VideoMetadata(BaseModel):
+    name: str
+    dob: str
+    cdob: str
+    ga: str
+    chronoAge: str
+    currentAgeMonths: str
+    gender: str
+    location: str
+    deviceInfo: str
+    uhid: str
+
+class ReviewAction(BaseModel):
+    uhid: str
+    status: str
+    comment: Optional[str] = ""
+
+
+async def sync_data_from_drive():
+    if not drive_client:
+        logger.warning("DriveClient not initialized, skipping sync task.")
+        return
+    while True:
         try:
-            clips_drive_path = f"{folder_name}/Clips"
-            clip_filename = Path(clip_path).name
+            logger.info("Starting data sync from Google Drive...")
+            drive_data = drive_client.get_all_data()
             
-            logger.info(f"Auto-uploading clip: {clip_filename} to {clips_drive_path}")
-            file_id = self.drive_client.upload_to_drive(clips_drive_path, clip_path, file_name=clip_filename)
-            logger.info(f"Successfully uploaded {clip_filename} with ID: {file_id}")
+            local_df = pd.read_csv(DATA_DB)
+            local_uhids = set(local_df['Folder_Name'].tolist())
+            
+            new_records = []
+            for record in drive_data:
+                folder_name = record['folder_name']
+                uhid = folder_name.replace("Data", "UHID")
+                if uhid not in local_uhids:
+                    json_details = record['info']['content']
+                    new_records.append({
+                        "Folder_Name": uhid,
+                        "JSON_Details": json.dumps(json_details),
+                        "VideoQ_status": json_details.get("VideoQ_status", "NA"),
+                        "GMAE_status": json_details.get("GMAE_status", "Pending")
+                    })
+            
+            if new_records:
+                new_df = pd.DataFrame(new_records)
+                new_df.to_csv(DATA_DB, mode='a', header=False, index=False)
+                logger.info(f"Added {len(new_records)} new records from Drive to data.csv")
             
         except Exception as e:
-            logger.error(f"Failed to auto-upload clip {clip_path}: {e}")
-            # Don't raise the exception to prevent the file watcher from stopping
+            logger.error(f"Error during data sync: {e}")
+        
+        await asyncio.sleep(5)
 
-# Initialize file system watcher
-temp_handler = TempFolderHandler(drive_client)
-observer = Observer()
-observer.schedule(temp_handler, str(TEMP_DIR), recursive=True)
-observer.start()
+@app.on_event("startup")
+async def startup_event():
+    if drive_client:
+        asyncio.create_task(sync_data_from_drive())
 
-# Utility functions
+# API Endpoints
+@app.post("/api/login")
+async def login(user: User):
+    with open(USERS_DB, "r") as f:
+        reader = csv.reader(f)
+        next(reader)
+        for row in reader:
+            if row[0] == user.email and row[1] == user.password:
+                return {"message": "Login successful!"}
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
-def get_next_data_folder() -> str:
-    """Get the next available DataX folder name"""
-    # Use drive client to get consistent numbering with Google Drive
-    return drive_client.get_next_folder_name_from_drive()
+@app.post("/api/signup")
+async def signup(user: UserSignup):
+    with open(USERS_DB, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([user.email, user.password, "expert"])
+    return {"message": "User created successfully!"}
 
-def create_recording_folder() -> tuple[str, Path, Path]:
-    """Create a new DataX folder with a Clips subfolder"""
-    folder_name = get_next_data_folder()
-    folder_path = TEMP_DIR / folder_name
-    clips_path = folder_path / "Clips"
-    
-    folder_path.mkdir(exist_ok=True)
-    clips_path.mkdir(exist_ok=True)
-    
-    logger.info(f"Created recording folder: {folder_path} with Clips subfolder: {clips_path}")
-    return folder_name, folder_path, clips_path
+@app.get("/api/dashboard-stats")
+async def get_dashboard_stats():
+    df = pd.read_csv(DATA_DB)
+    approved_count = len(df[df['GMAE_status'] == 'Approved'])
+    pending_count = len(df[df['GMAE_status'] == 'Pending'])
+    flagged_count = len(df[df['GMAE_status'] == 'Rejected'])
+    today_assigned = len(df)
+    return {
+        "today_assigned": today_assigned,
+        "pending_videos": pending_count,
+        "flagged_videos": flagged_count,
+        "approved_videos": approved_count,
+    }
 
-def segment_video(video_path: str, clip_duration: int = 15) -> List[str]:
-    """
-    Segment video into clips of specified duration.
-    Returns list of clip file paths.
-    """
-    logger.info(f"Starting video segmentation for {video_path}")
+@app.get("/api/pending-videos")
+async def get_pending_videos():
     try:
-        duration_cmd = [
-            'ffprobe', '-v', 'error', '-show_entries',
-            'format=duration', '-of', 'csv=p=0', video_path
-        ]
-        result = subprocess.run(duration_cmd, capture_output=True, text=True, check=True)
-        total_duration = float(result.stdout.strip())
-        
-        num_clips = int(total_duration // clip_duration) + (1 if total_duration % clip_duration > 5 else 0)
-        
-        video_name = Path(video_path).stem
-        clips_dir = CLIPS_CACHE_DIR / video_name
-        clips_dir.mkdir(exist_ok=True)
-        
-        clip_paths = []
-        
-        for i in range(num_clips):
-            start_time = i * clip_duration
-            clip_filename = f"{video_name}_clip_{i+1:03d}.mp4"
-            clip_path = clips_dir / clip_filename
-            
-            cmd = [
-                'ffmpeg', '-i', video_path,
-                '-ss', str(start_time),
-                '-t', str(clip_duration),
-                '-c', 'copy',
-                '-avoid_negative_ts', 'make_zero',
-                str(clip_path),
-                '-y'
-            ]
-            
-            subprocess.run(cmd, capture_output=True, check=True)
-            clip_paths.append(str(clip_path))
-        
-        logger.info(f"Video segmentation complete. {len(clip_paths)} clips created.")
-        return clip_paths
-    
-    except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg error: {e.stderr.strip()}")
-        raise Exception(f"FFmpeg error: {e.stderr.strip()}")
+        df = pd.read_csv(DATA_DB)
+        pending_df = df[df['GMAE_status'] == 'Pending']
+        videos = []
+        for _, row in pending_df.iterrows():
+            json_details = json.loads(row['JSON_Details'])
+            videos.append({
+                "babyName": json_details.get("Name"),
+                "age": json_details.get("Age"),
+                "uhid": row['Folder_Name']
+            })
+        return videos
     except Exception as e:
-        logger.error(f"Video segmentation failed: {str(e)}")
-        raise Exception(f"Video segmentation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-def generate_video_stream(video_path: str, apply_opencv: bool = False):
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise HTTPException(status_code=500, detail="Could not open video file.")
-
+@app.get("/api/approved-videos")
+async def get_approved_videos():
     try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            if apply_opencv and FACE_CASCADE:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = FACE_CASCADE.detectMultiScale(gray, 1.1, 4)
-                for (x, y, w, h) in faces:
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
-            
-            ret, buffer = cv2.imencode('.jpg', frame)
-            if not ret:
-                continue
-            
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            
-            time.sleep(0.01) # Control frame rate
-    finally:
-        cap.release()
+        df = pd.read_csv(DATA_DB)
+        approved_df = df[df['GMAE_status'] == 'Approved']
+        videos = []
+        for _, row in approved_df.iterrows():
+            json_details = json.loads(row['JSON_Details'])
+            videos.append({
+                "babyName": json_details.get("Name"),
+                "age": json_details.get("Age"),
+                "uhid": row['Folder_Name'],
+                "dob": json_details.get("DOB"),
+                "chronoAge": json_details.get("ChronoAge"),
+                "gender": json_details.get("Gender"),
+                "location": json_details.get("Location"),
+                "videoUrl": f"/api/videos/{row['Folder_Name']}"
+            })
+        return videos
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-def get_video_duration(video_path: str) -> float:
+@app.get("/api/flagged-videos")
+async def get_flagged_videos():
     try:
-        duration_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', video_path]
-        result = subprocess.run(duration_cmd, capture_output=True, text=True, check=True)
-        return float(result.stdout.strip())
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Error getting duration: {e.stderr.strip()}")
-        return 0.0
+        df = pd.read_csv(DATA_DB)
+        flagged_df = df[df['GMAE_status'] == 'Rejected']
+        videos = []
+        for _, row in flagged_df.iterrows():
+            json_details = json.loads(row['JSON_Details'])
+            videos.append({
+                "babyName": json_details.get("Name"),
+                "age": json_details.get("Age"),
+                "uhid": row['Folder_Name'],
+                "dob": json_details.get("DOB"),
+                "chronoAge": json_details.get("ChronoAge"),
+                "gender": json_details.get("Gender"),
+                "location": json_details.get("Location"),
+                "comment": json_details.get("Comments"),
+                "videoUrl": f"/api/videos/{row['Folder_Name']}"
+            })
+        return videos
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-def stitch_clips(clip_paths: List[str], output_path: str):
-    list_file_path = Path(tempfile.gettempdir()) / f"mylist_{uuid.uuid4()}.txt"
-    with open(list_file_path, "w") as f:
-        for path in clip_paths:
-            f.write(f"file '{os.path.abspath(path)}'\n")
+@app.get("/api/videos/{uhid}")
+async def get_video(uhid: str):
+    folder_name = uhid.replace("UHID", "Data")
+    video_path = Path(CLIPS_CACHE_DIR) / folder_name / "Clip1.mp4"
     
-    cmd = [
-        'ffmpeg', '-f', 'concat', '-safe', '0', '-i', str(list_file_path),
-        '-c', 'copy', str(output_path), '-y'
-    ]
+    if not video_path.exists():
+        if drive_client:
+            drive_client.download_clips_for_folder(folder_name)
+        if not video_path.exists():
+            raise HTTPException(status_code=404, detail="Video not found")
     
+    return FileResponse(str(video_path), media_type="video/mp4")
+
+@app.get("/api/video-details/{uhid}")
+async def get_video_details(uhid: str):
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-        logger.info(f"Clips stitched successfully to {output_path}")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg stitching error: {e.stderr}")
-        raise
-    finally:
-        list_file_path.unlink(missing_ok=True)
+        df = pd.read_csv(DATA_DB)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Database not found")
 
+    video_row = df[df['Folder_Name'] == uhid]
+    if video_row.empty:
+        raise HTTPException(status_code=404, detail="Video details not found")
+    
+    row = video_row.iloc[0]
+    json_details = json.loads(row['JSON_Details'])
+    response_data = {
+        "babyName": json_details.get("Name"),
+        "dob": json_details.get("DOB"),
+        "cdob": json_details.get("CDoB"),
+        "ga": json_details.get("GA"),
+        "chronoAge": json_details.get("ChronoAge"),
+        "currentAgeMonths": json_details.get("CurrentAgeMonths"),
+        "gender": json_details.get("Gender"),
+        "location": json_details.get("Location"),
+        "deviceInfo": json_details.get("DeviceInfo"),
+        "uhid": uhid,
+        "status": row['GMAE_status'],
+        "comment": json_details.get("Comments", "")
+    }
+    return response_data
 
-# Routes
+@app.post("/api/update-status/{uhid}")
+async def update_video_status(uhid: str, action: ReviewAction):
+    try:
+        df = pd.read_csv(DATA_DB)
+        if uhid not in df['Folder_Name'].values:
+            raise HTTPException(status_code=404, detail="Video not found")
+        
+        df.loc[df['Folder_Name'] == uhid, 'GMAE_status'] = action.status
+        
+        json_details_str = df.loc[df['Folder_Name'] == uhid, 'JSON_Details'].iloc[0]
+        json_details = json.loads(json_details_str)
+        json_details['GMAE_status'] = action.status
+        json_details['Comments'] = action.comment
+        df.loc[df['Folder_Name'] == uhid, 'JSON_Details'] = json.dumps(json_details)
+        df.to_csv(DATA_DB, index=False)
+        
+        timestamp = datetime.now().isoformat()
+        folder_name = uhid.replace("UHID", "Data")
+        if drive_client:
+            drive_client.update_verification_status(folder_name, action.status, action.comment, timestamp)
+        return {"message": f"Status for {uhid} updated to {action.status}"}
+    except Exception as e:
+        logger.error(f"Error during status update: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update video status: {e}")
 
-@app.get("/", response_class=HTMLResponse)
-async def viewer_dashboard(request: Request):
-    data = drive_client.get_all_data()
-    drive_space = drive_client.get_drive_space()
-    return templates.TemplateResponse("viewer.html", {
-        "request": request,
-        "data": data,
-        "drive_space": drive_space
-    })
-
-@app.get("/verifier", response_class=HTMLResponse)
-async def verifier_dashboard(request: Request):
-    data = drive_client.get_all_data()
-    drive_space = drive_client.get_drive_space()
-    return templates.TemplateResponse("verifier.html", {
-        "request": request,
-        "data": data,
-        "drive_space": drive_space
-    })
-
-@app.get("/upload", response_class=HTMLResponse)
-async def upload_page(request: Request):
-    drive_space = drive_client.get_drive_space()
-    return templates.TemplateResponse("upload.html", {
-        "request": request,
-        "drive_space": drive_space
-    })
-
-@app.post("/api/upload")
-async def upload_data(
-    background_tasks: BackgroundTasks,
-    name: str = Form(...),
-    age: str = Form(...),
-    gender: str = Form(...),
-    condition: str = Form(...),
-    folder_name: str = Form(...),
-    clip_duration: int = Form(15),
-    other_files: List[UploadFile] = File(None)
+@app.post("/api/upload-video")
+async def upload_video_and_metadata(
+    video: UploadFile = File(...),
+    name: str = "Anonymous",
+    dob: str = "NA",
+    cdob: str = "NA",
+    ga: str = "NA",
+    chronoAge: str = "NA",
+    currentAgeMonths: str = "NA",
+    gender: str = "NA",
+    location: str = "NA",
+    deviceInfo: str = "NA",
+    comment: str = ""
 ):
+    if not drive_client:
+        raise HTTPException(status_code=503, detail="Drive service unavailable")
     try:
-        # Check if the folder exists in temp
-        folder_path = TEMP_DIR / folder_name
-        if not folder_path.exists():
-            raise HTTPException(status_code=400, detail="Recording folder not found.")
-
-        logger.info(f"Processing upload for folder: {folder_path}")
-
-        # Create patient.txt
-        info_content = (
-            f"Name: {name}\nAge: {age}\nGender: {gender}\nCondition: {condition}\n"
-            f"Verification Status: Pending\nReason: \nTimestamp: \n"
-            f"Clip Duration: {clip_duration}s"
-        )
-        info_filename = "patient.txt"
-        info_path = folder_path / info_filename
-        with open(info_path, "w") as f:
-            f.write(info_content)
-        logger.info(f"Created patient info file: {info_path}")
-
-        # Handle other files
-        patient_info_dir = folder_path / "patient_info"
-        patient_info_dir.mkdir(exist_ok=True)
-        uploaded_other_files = []
-        if other_files:
-            for file in other_files:
-                if file.filename:  # Check if file has a name
-                    file_path = patient_info_dir / file.filename
-                    with open(file_path, "wb") as buffer:
-                        shutil.copyfileobj(file.file, buffer)
-                    drive_client.upload_to_drive(f"{folder_name}/patient_info", str(file_path))
-                    uploaded_other_files.append(file.filename)
-            logger.info(f"Uploaded {len(uploaded_other_files)} additional files.")
+        folder_name = drive_client.get_next_folder_name_from_drive()
+        uhid = folder_name.replace("Data", "UHID")
         
-        # Upload patient.txt to drive
-        drive_client.upload_to_drive(folder_name, str(info_path))
+        local_folder_path = TEMP_DIR / folder_name
+        local_folder_path.mkdir(exist_ok=True)
+        video_filename = "Clip1.mp4"
+        video_path = local_folder_path / video_filename
         
-        # Get list of clips that were already uploaded automatically
-        clips = drive_client.get_clips_in_folder(folder_name)
+        async with aiofiles.open(video_path, 'wb') as out_file:
+            content = await video.read()
+            await out_file.write(content)
+
+        patient_data = {
+            "Name": name, "DOB": dob, "CDoB": cdob, "GA": ga,
+            "ChronoAge": chronoAge, "CurrentAgeMonths": currentAgeMonths,
+            "Gender": gender, "Location": location, "DeviceInfo": deviceInfo,
+            "Comments": comment, "GMAE_status": "Pending",
+            "VideoQ_status": "NA", "Folder_Name": folder_name
+        }
+        patient_txt_path = local_folder_path / "patient.txt"
+        with open(patient_txt_path, 'w') as f:
+            for key, value in patient_data.items():
+                f.write(f"{key}: {value}\n")
+
+        drive_client.upload_to_drive(folder_name, "Clips", str(video_path), file_name=video_filename)
+        drive_client.upload_to_drive(folder_name, "", str(patient_txt_path))
+
+        df = pd.read_csv(DATA_DB)
+        new_row = {
+            "Folder_Name": uhid,
+            "JSON_Details": json.dumps(patient_data),
+            "VideoQ_status": "NA",
+            "GMAE_status": "Pending"
+        }
+        pd.DataFrame([new_row]).to_csv(DATA_DB, mode='a', header=False, index=False)
         
-        return JSONResponse({
-            "status": "success",
-            "folder": folder_name,
-            "clips_folder": f"{folder_name}/Clips",
-            "info": info_filename,
-            "total_clips": len(clips),
-            "clips": clips,
-            "clip_duration": clip_duration,
-            "other_files": uploaded_other_files
-        })
-    
+        shutil.rmtree(local_folder_path)
+
+        return {"message": f"Video for {name} uploaded successfully with UHID: {uhid}"}
+
     except Exception as e:
-        logger.error(f"Upload failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/verification")
-async def submit_verification(
-    folder_name: str = Form(...),
-    status: str = Form(...),
-    reason: str = Form(...),
-    timestamp: Optional[str] = Form(None)
-):
-    try:
-        drive_client.update_verification_status(folder_name, status, reason, timestamp)
-        return JSONResponse({"status": "success", "message": "Verification status updated."})
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/data")
-async def get_all_data():
-    return drive_client.get_all_data()
-
-@app.get("/api/drive_space")
-async def get_drive_space():
-    return drive_client.get_drive_space()
-
-@app.get("/api/videos/{folder_name}/details")
-async def get_video_details(folder_name: str):
-    try:
-        details = drive_client.get_folder_details(folder_name)
-        if not details:
-            raise HTTPException(status_code=404, detail="Video details not found.")
-        return JSONResponse(details)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/videos/{folder_name}/play", response_class=StreamingResponse)
-async def play_video_stream(folder_name: str, apply_opencv: bool = False):
-    try:
-        clips_dir = drive_client.download_clips_for_folder(folder_name)
-        if not clips_dir:
-            raise HTTPException(status_code=404, detail="Clips not found.")
-            
-        clip_paths = sorted(clips_dir.glob("*.mp4"))
-        if not clip_paths:
-            raise HTTPException(status_code=404, detail="No clips found in folder.")
-
-        stitched_path = Path(tempfile.gettempdir()) / f"stitched_{uuid.uuid4()}.mp4"
-        stitch_clips(clip_paths, str(stitched_path))
-        
-        return StreamingResponse(generate_video_stream(str(stitched_path), apply_opencv), media_type="multipart/x-mixed-replace; boundary=frame")
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.websocket("/ws/record")
-async def record_websocket(websocket: WebSocket):
-    await websocket.accept()
-    
-    try:
-        # Create recording folder structure
-        folder_name, folder_path, clips_path = create_recording_folder()
-        
-        # Send the folder name to the client
-        await websocket.send_json({
-            "status": "recording_started",
-            "folder_name": folder_name,
-            "clips_path": str(clips_path)
-        })
-        
-        logger.info(f"WebSocket connection opened. Folder: {folder_name}")
-        
-        clip_number = 1
-        
-        while True:
-            try:
-                # Receive the full video clip as binary data
-                data = await websocket.receive_bytes()
-                
-                if data:
-                    clip_filename = f"Clip{clip_number:03d}.webm"
-                    clip_path = clips_path / clip_filename
-                    
-                    with open(clip_path, 'wb') as f:
-                        f.write(data)
-                        
-                    logger.info(f"Received and saved clip: {clip_path}")
-                    
-                    # Notify client about new clip
-                    await websocket.send_json({
-                        "status": "new_clip_saved",
-                        "clip_number": clip_number
-                    })
-                    
-                    clip_number += 1
-            
-            except WebSocketDisconnect:
-                break
-            except Exception as e:
-                logger.error(f"Error during recording: {e}")
-                break
-
-    except WebSocketDisconnect:
-        logger.info(f"Client disconnected from recording")
-    except Exception as e:
-        logger.error(f"An error occurred during recording: {e}")
-    finally:
-        # Clean up active recording (if any)
-        if 'folder_name' in locals() and folder_name in active_recordings:
-            del active_recordings[folder_name]
-        logger.info(f"Recording session ended")
-
-@app.on_event("shutdown")
-def shutdown_event():
-    observer.stop()
-    observer.join()
+        logger.error(f"Error during video upload: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload video: {e}")
