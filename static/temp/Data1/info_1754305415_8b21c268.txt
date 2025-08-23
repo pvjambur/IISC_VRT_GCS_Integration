@@ -1,4 +1,0 @@
-Name: Pranav
-Age: 17
-Gender: Female
-Condition: scefwbveb
