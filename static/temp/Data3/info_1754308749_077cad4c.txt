@@ -1,4 +1,0 @@
-Name: dwsd
-Age: 234
-Gender: Female
-Condition: sdwvds
